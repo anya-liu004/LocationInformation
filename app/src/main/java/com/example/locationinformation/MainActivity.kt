@@ -34,6 +34,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.google.android.gms.location.LocationCallback
 import com.google.android.gms.location.LocationRequest
+import com.google.android.gms.location.LocationResult
 import com.google.android.gms.maps.model.CameraPosition
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -58,19 +59,36 @@ fun LocationScreen() {
     var customMarkers by remember { mutableStateOf(listOf<LatLng>()) }
     val cameraPositionState = rememberCameraPositionState()
 
+    val fusedLocationClient = remember { LocationServices.getFusedLocationProviderClient(context) }
+    val locationRequest = remember {
+        LocationRequest.create().apply {
+            interval = 5000  // Fetch location every 5 seconds
+            fastestInterval = 2000
+            priority = LocationRequest.PRIORITY_HIGH_ACCURACY
+        }
+    }
+
+    val locationCallback = remember {
+        object : LocationCallback() {
+            override fun onLocationResult(locationResult: LocationResult) {
+                locationResult.lastLocation?.let { location ->
+                    userLocation = location
+                    cameraPositionState.position = CameraPosition.fromLatLngZoom(
+                        LatLng(location.latitude, location.longitude), 15f
+                    )
+                    coroutineScope.launch {
+                        addressText = getAddressFromLocation(context, location.latitude, location.longitude)
+                    }
+                }
+            }
+        }
+    }
+
     val locationPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
     ) { isGranted ->
         if (isGranted) {
-            fetchUserLocation(context) { location ->
-                userLocation = location
-                cameraPositionState.position = CameraPosition.fromLatLngZoom(
-                    LatLng(location.latitude, location.longitude), 15f
-                )
-                coroutineScope.launch {
-                    addressText = getAddressFromLocation(context, location.latitude, location.longitude)
-                }
-            }
+            startLocationUpdates(context, fusedLocationClient, locationRequest, locationCallback)
         } else {
             addressText = "Location permission denied"
         }
@@ -105,31 +123,26 @@ fun LocationScreen() {
             }
         }
     }
-
 }
 
-private fun fetchUserLocation(context: Context, onLocationReceived: (Location) -> Unit) {
-    val fusedLocationClient = LocationServices.getFusedLocationProviderClient(context)
-
-    if (ActivityCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION)
-        != PackageManager.PERMISSION_GRANTED &&
-        ActivityCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION)
-        != PackageManager.PERMISSION_GRANTED
+private fun startLocationUpdates(
+    context: Context,
+    fusedLocationClient: FusedLocationProviderClient,
+    locationRequest: LocationRequest,
+    locationCallback: LocationCallback
+) {
+    if (ActivityCompat.checkSelfPermission(
+            context,
+            Manifest.permission.ACCESS_FINE_LOCATION
+        ) != PackageManager.PERMISSION_GRANTED
     ) {
         Log.e("Location", "Location permission not granted")
         return
     }
 
-    fusedLocationClient.lastLocation.addOnSuccessListener { location ->
-        if (location != null) {
-            onLocationReceived(location)
-        } else {
-            Log.e("Location", "Failed to retrieve location")
-        }
-    }.addOnFailureListener { exception ->
-        Log.e("Location", "Error getting location: ${exception.message}")
-    }
+    fusedLocationClient.requestLocationUpdates(locationRequest, locationCallback, null)
 }
+
 
 
 suspend fun getAddressFromLocation(context: Context, latitude: Double, longitude: Double): String =
